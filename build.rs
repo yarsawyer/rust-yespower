@@ -1,41 +1,34 @@
-use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+
+fn rerun_if_changed(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.display());
+}
 
 fn main() {
-    // Navigate to the C library directory
-    let crate_dir: String = env::var("CARGO_MANIFEST_DIR").unwrap();
-    let lib_dir = format!("{}/depends/yespower", crate_dir);
-    let gcc = "gcc";
+    let manifest_dir = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"),
+    );
+    let yespower_dir = manifest_dir.join("depends/yespower");
 
-    // Compile the necessary components
-    Command::new(gcc)
-        .current_dir(&lib_dir)
-        .args(&["-c", "-O2", "-fomit-frame-pointer", "-funroll-loops", "yespower-opt.c", "sha256.c"])
-        .status()
-        .unwrap();
+    for file in [
+        "insecure_memzero.h",
+        "sha256.c",
+        "sha256.h",
+        "sysendian.h",
+        "yespower-opt.c",
+        "yespower-platform.c",
+        "yespower.h",
+    ] {
+        rerun_if_changed(&yespower_dir.join(file));
+    }
 
-    // Link the object files into a static library
-    Command::new("ar")
-        .current_dir(&lib_dir)
-        .args(&["rcs", "libyespower.a", "yespower-opt.o", "sha256.o"])
-        .status()
-        .unwrap();
-
-    // Link the compiled library
-    println!("cargo:rustc-link-search=native={}", lib_dir);
-    println!("cargo:rustc-link-lib=static=yespower");
-
-    // Generate bindings
-    let bindings = bindgen::Builder::default()
-        .header(format!("{}/yespower.h", lib_dir))
-        .clang_arg(format!("-I{}", lib_dir))
-        .generate()
-        .expect("Failed to generate bindings.");
-
-    // Write the bindings to a file
-    let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out_path.join("bindings.rs"))
-        .expect("Couldn't write bindings!");
+    cc::Build::new()
+        .warnings(false)
+        .include(&yespower_dir)
+        .std("gnu99")
+        .flag_if_supported("-fomit-frame-pointer")
+        .flag_if_supported("-funroll-loops")
+        .file(yespower_dir.join("yespower-opt.c"))
+        .file(yespower_dir.join("sha256.c"))
+        .compile("yespower_tidecoin");
 }
